@@ -943,6 +943,46 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
                     _ListItemCreationPayload(enumerated=enumerated, marker=marker)
                 )
 
+        elif (
+            isinstance(element, marko.block.ListItem)
+            and len(element.children) > 0
+            and isinstance(element.children[0], marko.block.List)
+        ):
+            _log.debug(" - List item with only a nested list")
+
+            # A list item with no text of its own that holds only a nested
+            # list: create the item eagerly with empty text. No text run will
+            # arrive to flush a lazy creation payload before the nested list
+            # is walked, so without this the item is skipped, the nested list
+            # attaches to the outer list, and the following items are
+            # re-indexed. Creating it here also registers it as the last item
+            # of its list, so the nested list hangs from it.
+            enumerated = (
+                list_ordered_flag_by_ref.get(parent_item.self_ref, False)
+                if parent_item
+                else False
+            )
+            parent_ref: str | None = parent_item.self_ref if parent_item else None
+            marker = ""
+            if enumerated and parent_ref is not None:
+                start = list_start_by_ref.get(parent_ref, 1)
+                count = list_item_counter_by_ref.get(parent_ref, 0)
+                marker = f"{start + count}."
+            parent_item = self._create_list_item(
+                doc=doc,
+                parent_item=parent_item,
+                text="",
+                enumerated=enumerated,
+                marker=marker,
+                formatting=formatting,
+                hyperlink=hyperlink,
+            )
+            if parent_ref:
+                list_last_item_by_ref[parent_ref] = cast(ListItem, parent_item)
+                list_item_counter_by_ref[parent_ref] = (
+                    list_item_counter_by_ref.get(parent_ref, 0) + 1
+                )
+
         elif isinstance(element, marko.inline.Image):
             _log.debug(" - Image with alt: %s, url: %s", element.title, element.dest)
 

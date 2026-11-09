@@ -178,6 +178,69 @@ def test_sub_list_of_an_image_only_item_is_not_duplicated():
     assert items["nested"].parent.resolve(doc).parent == items[""].get_ref()
 
 
+def test_list_item_with_only_a_nested_list_keeps_its_place():
+    """Regression test (docling-project/docling#5255):
+    A list item with no text of its own that holds only a nested sub-list must
+    still be created: the sub-list hangs from it and the following items keep
+    their numbers. Without this the item was dropped, the sub-list attached to
+    the outer list, and the next item was re-indexed to 1.
+    """
+    doc = (
+        get_converter()
+        .convert_string(
+            "1.\n   1. Sub-item A\n   2. Sub-item B\n2. Second item\n",
+            format=InputFormat.MD,
+        )
+        .document
+    )
+
+    items = [item for item in doc.texts if isinstance(item, ListItem)]
+    assert [(item.marker, item.text) for item in items] == [
+        ("1.", ""),
+        ("1.", "Sub-item A"),
+        ("2.", "Sub-item B"),
+        ("2.", "Second item"),
+    ]
+    # The sub-list hangs from the empty parent item, not from the outer list.
+    assert all(
+        item.parent.resolve(doc).parent == items[0].get_ref() for item in items[1:3]
+    )
+    assert doc.export_to_markdown() == (
+        "1. \n    1. Sub-item A\n    2. Sub-item B\n2. Second item"
+    )
+
+
+def test_list_item_with_only_a_nested_list_keeps_its_place_unordered_and_deep():
+    """The same defect for unordered lists and deeper nesting: every empty
+    parent item is kept, so the innermost item still hangs from its parent.
+    """
+    doc = (
+        get_converter()
+        .convert_string("- \n  - Sub A\n  - Sub B\n- Second\n", format=InputFormat.MD)
+        .document
+    )
+    items = [item for item in doc.texts if isinstance(item, ListItem)]
+    assert [item.text for item in items] == ["", "Sub A", "Sub B", "Second"]
+    assert all(
+        item.parent.resolve(doc).parent == items[0].get_ref() for item in items[1:3]
+    )
+
+    doc = (
+        get_converter()
+        .convert_string("1.\n   1.\n      1. Deep\n2. Second\n", format=InputFormat.MD)
+        .document
+    )
+    items = [item for item in doc.texts if isinstance(item, ListItem)]
+    assert [(item.marker, item.text) for item in items] == [
+        ("1.", ""),
+        ("1.", ""),
+        ("1.", "Deep"),
+        ("2.", "Second"),
+    ]
+    assert items[2].parent.resolve(doc).parent == items[1].get_ref()
+    assert doc.export_to_markdown() == ("1. \n    1. \n        1. Deep\n2. Second")
+
+
 @pytest.mark.parametrize(
     "heading",
     ["# ![](logo.png)", '# <img src="logo.png" width="80">', "![](logo.png)\n==="],
