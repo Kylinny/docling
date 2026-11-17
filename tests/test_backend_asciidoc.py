@@ -537,6 +537,96 @@ After the list.
     )
 
 
+def test_paragraph_attached_with_list_continuation_stays_in_its_item() -> None:
+    # A paragraph attached to a list item with "+" used to close the list:
+    # the next item restarted numbering at 1 and the paragraph landed
+    # after it, out of reading order. The paragraph must stay a child of
+    # the item it attaches to, and the list must keep its numbering.
+    source = b""". Install the package.
++
+Use a virtual environment
+to keep it separate.
+. Run the tests.
+"""
+    doc = _convert_adoc(source)
+    install, run = (item for item in doc.texts if isinstance(item, ListItem))
+    paragraph = next(item for item in doc.texts if item.label == "paragraph")
+    assert paragraph.parent == install.get_ref()
+    assert paragraph.text == "Use a virtual environment to keep it separate."
+    assert run.parent == install.parent
+    assert doc.export_to_markdown() == (
+        "1. Install the package.\n"
+        "Use a virtual environment to keep it separate.\n"
+        "2. Run the tests."
+    )
+
+
+def test_two_paragraphs_attached_with_list_continuations_stay_in_their_item() -> None:
+    # Two "+" paragraphs attach to the same item, and a blank line after
+    # the second one still leaves the next item in the same list.
+    source = b""". Install the package.
++
+Para one.
++
+Para two.
+
+. Run the tests.
+"""
+    doc = _convert_adoc(source)
+    install, run = (item for item in doc.texts if isinstance(item, ListItem))
+    paragraphs = [item for item in doc.texts if item.label == "paragraph"]
+    assert [item.text for item in paragraphs] == ["Para one.", "Para two."]
+    assert all(item.parent == install.get_ref() for item in paragraphs)
+    assert run.parent == install.parent
+    assert doc.export_to_markdown() == (
+        "1. Install the package.\nPara one.\nPara two.\n2. Run the tests."
+    )
+
+
+def test_paragraph_attached_with_list_continuation_in_bullet_list() -> None:
+    # The same attachment applies to bullet lists, where the paragraph
+    # must stay with its item instead of closing the list.
+    source = b"""* Buy milk
++
+Prefer oat milk
+when available.
+* Buy bread
+"""
+    doc = _convert_adoc(source)
+    milk, bread = (item for item in doc.texts if isinstance(item, ListItem))
+    paragraph = next(item for item in doc.texts if item.label == "paragraph")
+    assert paragraph.parent == milk.get_ref()
+    assert paragraph.text == "Prefer oat milk when available."
+    assert bread.parent == milk.parent
+    assert doc.export_to_markdown() == (
+        "- Buy milk\nPrefer oat milk when available.\n- Buy bread"
+    )
+
+
+def test_paragraph_attached_with_list_continuation_before_section_header() -> None:
+    # A "+" paragraph followed by a section header stays in its item;
+    # the header must not pull the paragraph out of the list.
+    source = b""". Install the package.
++
+Use a virtual environment
+to keep it separate.
+
+== Next section
+
+After the section.
+"""
+    doc = _convert_adoc(source)
+    (install,) = (item for item in doc.texts if isinstance(item, ListItem))
+    paragraph = next(item for item in doc.texts if item.label == "paragraph")
+    assert paragraph.parent == install.get_ref()
+    assert paragraph.text == "Use a virtual environment to keep it separate."
+    assert doc.export_to_markdown() == (
+        "1. Install the package.\n"
+        "Use a virtual environment to keep it separate.\n"
+        "\n## Next section\n\nAfter the section."
+    )
+
+
 def test_bullet_items_under_an_ordered_list_are_nested() -> None:
     # AsciiDoc nests lists by marker, not by indentation: a "*" item after a
     # "." item opens a nested bullet list, and the next "." item returns to the

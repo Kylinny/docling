@@ -267,6 +267,7 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         caption_data: list[str] = []
         last_list_item: ListItem | None = None
         list_continuation = False
+        continuation_paragraph = False  # a "+" paragraph is pending
         # The marker kind of the list group at each level ("." for ordered,
         # "*" or "-" for bullets), for the list being parsed. Reset when a new
         # list starts, so a level that holds a section header is never mistaken
@@ -290,6 +291,7 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         for block in self._iter_blocks(self.lines):
             if not isinstance(block, str):
                 pending_list_start = None
+                continuation_paragraph = False  # a block ends a pending paragraph
                 text_data, caption_data, in_list, last_list_item, list_continuation = (
                     self._add_block(
                         doc=doc,
@@ -309,13 +311,26 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
             if in_delimited_table and self._continue_table(table_data, line):
                 continue
 
-            in_list, last_list_item, list_continuation = self._close_list_if_needed(
-                line=line,
-                in_list=in_list,
-                parents=parents,
-                last_list_item=last_list_item,
-                list_continuation=list_continuation,
-                is_continuation_block=False,
+            is_para = (
+                stripped_line not in {"", "+", "|==="}
+                and not (self._is_list_item(line) or line.startswith(("=", "image::")))
+                and not (self._is_caption(line) or self._is_table_line(line))
+                and not re.match(r"^\[[^\[\]]+\]$", stripped_line)
+            )
+            text_data, continuation_paragraph = self._flush_pending_paragraph(
+                doc, text_data, continuation_paragraph, is_para, last_list_item
+            )
+            in_list, last_list_item, list_continuation, continuation_paragraph = (
+                self._close_list_if_needed(
+                    line=line,
+                    in_list=in_list,
+                    parents=parents,
+                    last_list_item=last_list_item,
+                    list_continuation=list_continuation,
+                    is_continuation_block=False,
+                    is_para=is_para,
+                    cont_para=continuation_paragraph,
+                )
             )
 
             # Block attributes and anchors (e.g. "[cols=\"2,1\"]", "[NOTE]",
@@ -809,7 +824,7 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         parents: dict[int, GroupItem | None],
     ) -> tuple[list[str], list[str], bool, ListItem | None, bool]:
         """Add a literal/listing block, flushing pending text and captions."""
-        in_list, last_list_item, list_continuation = self._close_list_if_needed(
+        in_list, last_list_item, list_continuation, _ = self._close_list_if_needed(
             line="<literal-block>",
             in_list=in_list,
             parents=parents,
@@ -842,6 +857,12 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         )
         return text_data, caption_data, in_list, last_list_item, False
 
+    def _flush_pending_paragraph(self, doc, text_data, cont_para, is_para, item):
+        if cont_para and text_data and not is_para:
+            text_data = self._flush_text_data(doc=doc, text_data=text_data, parent=item)
+            return text_data, False
+        return text_data, cont_para
+
     @classmethod
     def _close_list_if_needed(
         cls,
@@ -852,14 +873,20 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         last_list_item: ListItem | None,
         list_continuation: bool,
         is_continuation_block: bool,
-    ) -> tuple[bool, ListItem | None, bool]:
+        is_para: bool = False,
+        cont_para: bool = False,
+    ) -> tuple[bool, ListItem | None, bool, bool]:
+        is_continuation_text = is_para and (list_continuation or cont_para)
         if (
             not in_list
             or cls._is_list_item(line)
             or line.strip() in {"", "+"}
             or (list_continuation and (is_continuation_block or cls._is_picture(line)))
+            or is_continuation_text
         ):
-            return in_list, last_list_item, list_continuation
+            if is_continuation_text and list_continuation and in_list:
+                return in_list, last_list_item, False, True
+            return in_list, last_list_item, list_continuation, cont_para
 
         # Close every level of the list, not only the innermost one. Otherwise
         # the text after a nested list is added to the outer list group.
@@ -870,7 +897,7 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         ):
             parents[level] = None
             level -= 1
-        return False, None, False
+        return False, None, False, cont_para
 
     @classmethod
     def _match_list_kind(
@@ -981,7 +1008,7 @@ class AsciiDocBackend(DeclarativeDocumentBackend):
         *,
         doc: DoclingDocument,
         text_data: list[str],
-        parent: GroupItem | None,
+        parent: NodeItem | None,
         bold: bool = False,
     ) -> list[str]:
         if len(text_data) == 0:
